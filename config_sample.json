@@ -1,0 +1,14 @@
+{
+"scaffold":"CGCG...CTA........CGCGTTAAAC...CTAGAAGGCGGTT",
+"top_fraction":0.5,
+"cluster_similarity_threshold":0.9,
+"PK_compatibility":{
+        "U_range":[0, 1],
+        "S1_range":[4,10],
+        "L1_range":[1,10],
+        "S2_range":[4,8],
+        "L2_range":[0,6],
+        "L3_range":[5,15],
+        "D_range":[0,14]
+        }
+}
