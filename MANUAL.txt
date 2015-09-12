@@ -1,0 +1,17 @@
+Requirements:
+- python 2.7.x
+- numpy
+- pandas
+- scipy
+- matplotlib
+- biopython
+
+Setup:
+
+
+Usage:
+
+
+Output:
+
+
