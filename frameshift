@@ -7,7 +7,6 @@ import numpy as np
 import pandas as pd
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-import seaborn as sn
 from Bio import Seq
 from scipy.stats import fisher_exact
 from statsmodels.sandbox.stats.multicomp import fdrcorrection0
@@ -125,19 +124,19 @@ def dot_bracket(u, s1, l1, s2, l2, l3, d):
 	for n in range(int(u)):
 		db_string.append('.')
 	for n in range(int(s1)):
-		db_string.append('(')
+		db_string.append('[')
 	for n in range(int(l1)):
 		db_string.append('.')
 	for n in range(int(s2)):
-		db_string.append('[')
+		db_string.append('{')
 	for n in range(int(l2)):
 		db_string.append('.')
 	for n in range(int(s1)):
-		db_string.append(')')
+		db_string.append(']')
 	for n in range(int(l3)):
 		db_string.append('.')
 	for n in range(int(s2)):
-		db_string.append(']')
+		db_string.append('}')
 	for n in range(int(d)):
 		db_string.append('.')
 	return ''.join(db_string)
@@ -206,16 +205,23 @@ elif args.step == "2":
 	feature_names = PK_compatible_present(scaffold, U, S1, L1, S2, L2, L3, D)
 	print '{0} pseudoknot geometries being tested for compatibility'.format(len(feature_names))
 	featspace_pkcompat = gen_PK_compatibility_fs(seq_list, feature_names)
-	total = pd.concat([abundances, featspace_pkcompat, clustering], axis=1, join='inner')
-	# total.to_csv('{0}/data_table.tsv'.format(args.outputdir), sep='\t')
+	hemi = pd.concat([abundances, featspace_pkcompat], axis=1, join='inner')
+	hemi.to_csv('{0}/data_table.tsv'.format(args.outputdir), sep='\t')
+	# hemi = pd.read_csv('{0}/data_table.tsv'.format(args.outputdir), sep='\t')
+	total = pd.concat([hemi, clustering], axis=1, join='inner')
 
-	num_factors = 10
-	exposures = list(total[cluster_names].sum().order(ascending=False).index)[:num_factors]
-	outcomes = list(total[feature_names].sum().order(ascending=False).index)[:num_factors]
+	num_outcomes = 1
+	exposures = cluster_names
+	prevalent_PKs_by_cluster = {}
+	for c in cluster_names:
+		prevalent_PKs_by_cluster[c] = list(total[total[c] == 1][feature_names].sum(axis=0).sort(inplace=False, ascending=False).index)[:num_outcomes]
+
+	num_factors = num_outcomes * len(exposures)
 	fisher_ORs = []
 	fisher_pvals = []
 
 	for e in exposures:
+		outcomes = prevalent_PKs_by_cluster[e]
 		for o in outcomes:
 			ab = len(total[total[e] == 1])
 			a = total[total[e] == 1][o].sum()
@@ -228,40 +234,40 @@ elif args.step == "2":
 			fisher_pvals.append(pval)
 			fisher_ORs.append(odds_ratio)
 
-	num_sig_assoc = np.sum(fdrcorrection0(fisher_pvals)[0])
-	print 'BH correction for FDR yields {0} significant associations'.format(num_sig_assoc)
 	sig_idx = list(np.where(fdrcorrection0(fisher_pvals)[0] == True)[0])
 	motif_dict = {}
-	motif_dict['Cluster'] = [exposures[int(i / num_factors)] for i in sig_idx]
+	motif_dict['Cluster'] = [cluster_names[int(i / num_outcomes)] for i in sig_idx]
 	motif_dict['Sequence_Mode'] = [total['sequence'][np.where(total[i] == 1)[0][0]] for i in motif_dict['Cluster']]
-	motif_dict['PK_feature'] = [outcomes[i % num_factors] for i in sig_idx]
+	motif_dict['PK_feature'] = [prevalent_PKs_by_cluster[cluster_names[int(i / num_outcomes)]][i % num_outcomes] for i in sig_idx]
 	motif_dict['Dot_Bracket'] = [dot_bracket(*tuple(i.split('|'))) for i in motif_dict['PK_feature']]
 	motif_dict['OR_Seq_Struct'] = [fisher_ORs[i] for i in sig_idx]
 	motif_dict['pVal_Seq_Struct'] = [fisher_pvals[i] for i in sig_idx]
 	motif_dict['qVal_Seq_Struct'] = [fdrcorrection0(fisher_pvals)[1][i] for i in sig_idx]
 	motif_table = pd.DataFrame(motif_dict, columns=['Cluster','Sequence_Mode','PK_feature','Dot_Bracket','OR_Seq_Struct','pVal_Seq_Struct','qVal_Seq_Struct'])
 	motif_table.sort('OR_Seq_Struct', ascending=False, inplace=True)
-	motif_table.index = range(1, 1 + num_sig_assoc)
+	motif_table = motif_table[motif_table['OR_Seq_Struct'] > 1]
+	motif_table.index = range(1, 1 + len(motif_table))
+	print 'BH correction for FDR yields {0} significant positive associations'.format(len(motif_table))
 	motif_table.to_csv('{0}/motif_table.tsv'.format(args.outputdir), index=True, sep='\t')
 
-	for m_id in motif_table.index:
-		e = motif_table['Cluster'][m_id]
-		o = motif_table['PK_feature'][m_id]
-		a_rows = list(total[(total[e] == 1) & (total[o] == 1)].index)
-		ab_rows = list(total[total[e] == 1].index)
-		ac_rows = list(total[total[o] == 1].index)
-		if motif_table['OR_Seq_Struct'][m_id] > 1:
-			with open('{0}/a.fasta'.format(args.outputdir), 'w') as fh:
-				for row in a_rows:
-					fh.write('>seq_id\n{0}\n'.format(total['sequence'][row]))
-			subprocess.call('{0}/resources/weblogo/seqlogo -c -F PDF -w 50 -f {1}/a.fasta > {1}/motif_{2}.pdf'.format(args.pathrepository, args.outputdir, m_id), shell=True)
-			subprocess.call(['rm', '{0}/a.fasta'.format(args.outputdir)])
-			plt.Figure()
-			n, bins, patches = plt.hist(np.array(total['copy_number'][ab_rows]), alpha=0.3, color='blue')
-			plt.hist(np.array(total['copy_number'][a_rows]), alpha=0.3, color='red', bins=bins)
-			plt.tight_layout()
-			plt.savefig('{0}/histogram_{1}.pdf'.format(args.outputdir, m_id))
-			plt.clf()
+	# for m_id in motif_table.index:
+	# 	e = motif_table['Cluster'][m_id]
+	# 	o = motif_table['PK_feature'][m_id]
+	# 	a_rows = list(total[(total[e] == 1) & (total[o] == 1)].index)
+	# 	ab_rows = list(total[total[e] == 1].index)
+	# 	ac_rows = list(total[total[o] == 1].index)
+	# 	if motif_table['OR_Seq_Struct'][m_id] > 1:
+	# 		with open('{0}/a.fasta'.format(args.outputdir), 'w') as fh:
+	# 			for row in a_rows:
+	# 				fh.write('>seq_id\n{0}\n'.format(total['sequence'][row]))
+	# 		subprocess.call('{0}/resources/weblogo/seqlogo -c -F PDF -w 50 -f {1}/a.fasta > {1}/motif_{2}.pdf'.format(args.pathrepository, args.outputdir, m_id), shell=True)
+	# 		subprocess.call(['rm', '{0}/a.fasta'.format(args.outputdir)])
+	# 		plt.Figure()
+	# 		n, bins, patches = plt.hist(np.array(total['copy_number'][ab_rows]), alpha=0.3, color='blue')
+	# 		plt.hist(np.array(total['copy_number'][a_rows]), alpha=0.3, color='red', bins=bins)
+	# 		plt.tight_layout()
+	# 		plt.savefig('{0}/histogram_{1}.pdf'.format(args.outputdir, m_id))
+	# 		plt.clf()
 
 # log_file.close()
 
