@@ -3,10 +3,15 @@ Requirements:
 - numpy
 - pandas
 - scipy
+- statsmodels
+- scikit-learn
 - matplotlib
+- seaborn
 - biopython
 
 Setup:
+the frameshift executable contains the entire analysis pipeline, and relies on the directory structure of this repository (do not alter).
+a sample configuration file is provided in this repository (config_sample.json) as a starting point for your runs.
 
 
 Usage:
