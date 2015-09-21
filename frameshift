@@ -4,15 +4,13 @@ from os import makedirs
 import subprocess
 import argparse
 import json
-from itertools import product, combinations
-from math import ceil
+import httplib
+import time
+from itertools import product, combinations 
 import numpy as np
 import pandas as pd
-import matplotlib as mpl
 import matplotlib.pyplot as plt
 from Bio import Seq
-from scipy.stats import fisher_exact
-from statsmodels.sandbox.stats.multicomp import fdrcorrection0
 
 parser = argparse.ArgumentParser(description='nominate frameshift promoting pseudoknot motifs')
 parser.add_argument('-p', '--pathrepository', required=True,
@@ -29,8 +27,8 @@ parser.add_argument('-n', '--numseq', required=False, default=1000,
 	help='number of most abundant sequences to analyze')
 args = parser.parse_args()
 
-with open(args.configfile) as fh:    
-    config = json.load(fh)
+with open(args.configfile) as fh:
+	config = json.load(fh)
 
 if not exists(args.outputdir):
 	makedirs(args.outputdir + '/step1')
@@ -97,7 +95,7 @@ def gen_PK_compatibility_fs(seq_list, PK_feature_set):
     feature_space = pd.DataFrame(np.zeros((len(seq_list), 1 + num_feats)), columns=['None'] + PK_feature_set)
     row = 0
     for sequence in seq_list:
-        if (row + 1) % 500 == 0:
+        if (row + 1) % 1000 == 0:
             print 'PK_compatibility {0} / {1}'.format(row + 1, len(seq_list))
         
         compatibility_vector = np.zeros((1 + num_feats,))
@@ -128,31 +126,31 @@ def gen_PK_compatibility_fs(seq_list, PK_feature_set):
         row += 1
     return feature_space
 
-def dot_bracket(pk_string):
-	if pk_string == 'None':
-		return 'None'
-	else:
-		u, s1, l1, s2, l2, l3, d = tuple(pk_string.split('|'))
+def get_dot_bracket(pk_string):
+    if pk_string == 'None':
+        return 'None'
+    else:
+        u, s1, l1, s2, l2, l3, d = tuple(pk_string.split('|'))
 		db_string = []
 		for n in range(int(u)):
-			db_string.append('.')
-		for n in range(int(s1)):
-			db_string.append('[')
+	    	db_string.append('.')
+	    for n in range(int(s1)):
+	    	db_string.append('[')
 		for n in range(int(l1)):
-			db_string.append('.')
+	    	db_string.append('.')
 		for n in range(int(s2)):
-			db_string.append('{')
+	    	db_string.append('{')
 		for n in range(int(l2)):
-			db_string.append('.')
+	    	db_string.append('.')
 		for n in range(int(s1)):
-			db_string.append(']')
+	    	db_string.append(']')
 		for n in range(int(l3)):
-			db_string.append('.')
+	    	db_string.append('.')
 		for n in range(int(s2)):
-			db_string.append('}')
+	    	db_string.append('}')
 		for n in range(int(d)):
-			db_string.append('.')
-		return ''.join(db_string)
+	    	db_string.append('.')
+    return ''.join(db_string)
 
 def neighborhood_2(seq, variable_positions):
     var_pos = map(lambda x: x - 1, variable_positions)
@@ -230,6 +228,7 @@ if args.step.find('2') > -1:
 
 if args.step.find('3') > -1:
 	print 'STEP 3: Sequence Clustering and Motif Nomination'
+	
 	abundances = pd.read_csv('{0}/step1/abundances.txt'.format(args.outputdir), sep='\t', header=None, names=['copy_number','sequence'])[:int(args.numseq)]
 	featspace_pkcompat = pd.read_csv('{0}/step2/PK_compatibility.tsv'.format(args.outputdir), sep='\t')
 	feature_names = list(featspace_pkcompat.columns)
@@ -243,13 +242,16 @@ if args.step.find('3') > -1:
 
 	observed_PKs = list(featspace_pkcompat.sum(axis=0)[featspace_pkcompat.sum(axis=0) > 0].sort(1, inplace=False, ascending=False).index)
 	print '{0} different PK compatibilities observed in top {1} sequences'.format(len(observed_PKs), args.numseq)
+	
 	mean_abundances = []
 	for feat in observed_PKs:
 		mean_abundances.append(total.groupby(feat).mean()['copy_number'][1])
 	mean_abundances = np.array(mean_abundances)
+	np.savetxt('{0}/tmp/mean_abundances.txt'.format(args.outputdir), mean_abundances)
 
-	percentile_enrichment = int(0.05 * len(prepost_selection))
-	percentile_mean_abundance = np.sort(mean_abundances)[::-1][int(0.05 * len(mean_abundances))]
+	thresh = 0.05
+	percentile_enrichment = int(thresh * len(prepost_selection))
+	percentile_mean_abundance = np.sort(mean_abundances)[::-1][int(thresh * len(mean_abundances))]
 	enrichments = (prepost_selection['copy_number_selection'] / prepost_selection['copy_number_selection'].sum()) / (prepost_selection['copy_number_initial'] / prepost_selection['copy_number_initial'].sum())
 	enrich_set = set(prepost_selection.ix[enrichments.sort(0, inplace=False, ascending=False).index[:percentile_enrichment], 'feature_name_selection'])
 	abundance_set = set([observed_PKs[i] for i in np.nonzero(mean_abundances > percentile_mean_abundance)[0]])
@@ -263,7 +265,6 @@ if args.step.find('3') > -1:
 	    match_idx = list(total[total[PK] == 1].index)
 	    PK_match_seqs[PK] = match_seqs
 	    PK_match_idx[PK] = match_idx
-	    print PK, len(match_seqs)
 
 	    with open('{0}/tmp/PK_{1}.fasta'.format(args.outputdir, PK.replace('|','_')), 'w') as fastafile:
 	    	for idx, seq in zip(match_idx, match_seqs):
@@ -271,7 +272,7 @@ if args.step.find('3') > -1:
 	    cmd = '{0}/resources/cdhit/cd-hit-est -i {1}/tmp/PK_{2}.fasta -o {1}/tmp/cdhit-{2} -c {3} >/dev/null 2>&1'.format(args.pathrepository, args.outputdir, PK.replace('|','_'), config['cluster_similarity_threshold'])
 	    subprocess.call(cmd, shell=True)
 	    num_clusters[PK] = int(subprocess.check_output(['wc', '-l', '{0}/tmp/cdhit-{1}'.format(args.outputdir, PK.replace('|','_'))]).split(args.outputdir)[0].strip()) / 2
-	    print '{0} clusters detected for PK {1}'.format(num_clusters[PK], PK)
+	    print '{0} cluster(s) detected for the {1} sequences matching {2}'.format(num_clusters[PK], len(match_seqs), PK)
 	
 	clustering = {}
 	for PK in nominees_PK:
@@ -283,69 +284,84 @@ if args.step.find('3') > -1:
 				else:
 					row = int(line.split('>')[1].split('...')[0])
 					clustering[PK]['cluster_{0}'.format(c_num)][row] = 1
-	
+
+	num_motifs = sum([num_clusters[pk] for pk in nominees_PK])
 	motif_table = { 'motif_id':[],
 					'num_supporting_seqs':[],
 					'mean_copynumber':[],
 					'stdev_copynumber':[],
 					'PK_compatibility':[],
-					'dot_bracket_notation':[],
+					'pkiss_dot_bracket':[],
+					'pkiss_MFE':[],
 					'sequence_mode':[],
 					'mode_neighborhood_occupancy':[]
 					}
 	motif_counter = 1
+	conn = httplib.HTTPConnection('bibiserv2.cebitec.uni-bielefeld.de', 80, timeout=1000)
+	header_json = {'Content-type': 'application/json'}
+	header_plain = {'Content-type': 'text/plain'}
 	for PK in nominees_PK:
 		for c in clustering[PK].columns:
+			print 'calculating motif {0} / {1}'.format(motif_counter, num_motifs)
 			subset = clustering[PK][clustering[PK][c] == 1]
 			n = len(subset)
 			mu_CN = total.ix[subset.index, 'copy_number'].mean()
 			sigma_CN = total.ix[subset.index, 'copy_number'].std()
 			mode_seq = total['sequence'][min(subset.index)]
+			
+			pkiss_input_filename = '{0}/tmp/motif_{1}.json'.format(args.outputdir, motif_counter)
+			with open(pkiss_input_filename, 'w') as fh:
+				fh.write('{\n')
+				fh.write('\t"pkiss_input_rna_sequences":">ID\\r\\n{0}",\n'.format(mode_seq))
+				fh.write('\t"paramset":{\n')
+				fh.write('\t\t"pkiss_parameter_allowLP":"0",\n')
+				fh.write('\t\t"pkiss_parameter_minHairpinLength":"2",\n')
+				fh.write('\t\t"pkiss_parameter_windowIncrement":"1",\n')
+				fh.write('\t\t"pkiss_parameter_Hpenalty":"9.0",\n')
+				fh.write('\t\t"pkiss_parameter_param":"rna_turner2004.par",\n')
+				fh.write('\t\t"pkiss_parameter_strategy":"P",\n')
+				fh.write('\t\t"pkiss_parameter_temperature":"37.0",\n')
+				fh.write('\t\t"pkiss_parameter_Kpenalty":"12.0"\n')
+				fh.write('\t}\n')
+				fh.write('}\n')
+			
+			conn.request('POST', '/rest/pkiss/pkiss_function_mfe/request', open(pkiss_input_filename, 'rb'), header_json)
+			job_id = conn.getresponse().read()
+			time.sleep(2)
+			statuscode = 0
+			while statuscode != 600:
+				conn.request('POST', '/rest/pkiss/pkiss_function_mfe/statuscode', job_id, header_plain)
+				statuscode = int(conn.getresponse().read())
+				time.sleep(2)
+
+			conn.request('POST', '/rest/pkiss/pkiss_function_mfe/response', job_id, header_plain)
+			pkiss_output = conn.getresponse().read().strip().split('\n')[-1]
+			mfe = float(pkiss_output.strip().split()[0])
+			dot_bracket = pkiss_output.strip().split()[1]
+
 			occupancy = 0
 			observed = list(abundances['sequence'])
 			for seq in neighborhood_2(mode_seq, [5,6,7,11,12,13,14,15,16,17,18,29,30,31]):
 				if seq in observed:
 					occupancy += 1
-			print motif_counter, n, mu_CN, sigma_CN, PK, dot_bracket(PK), mode_seq, occupancy / 861.0
+			
+			with open('{0}/step3/logo_{1}.fasta'.format(args.outputdir, motif_counter), 'w') as fh:
+				for seq_idx in subset.index:
+					fh.write('>seq_{0}\n{1}\n'.format(seq_idx, total['sequence'][seq_idx]))
+			subprocess.call('{0}/resources/weblogo/seqlogo -c -F PDF -w 50 -f {1}/step3/logo_{2}.fasta > {1}/step3/motif_{2}.pdf'.format(args.pathrepository, args.outputdir, motif_counter), shell=True)
+
 			motif_table['motif_id'].append(motif_counter)
 			motif_table['num_supporting_seqs'].append(n)
 			motif_table['mean_copynumber'].append(mu_CN)
 			motif_table['stdev_copynumber'].append(sigma_CN)
 			motif_table['PK_compatibility'].append(PK)
-			motif_table['dot_bracket_notation'].append(dot_bracket(PK))
+			motif_table['pkiss_dot_bracket'].append(dot_bracket)
+			motif_table['pkiss_MFE'].append(mfe)
 			motif_table['sequence_mode'].append(mode_seq)
 			motif_table['mode_neighborhood_occupancy'].append(occupancy / 861.0)
-			with open('{0}/step3/logo_{1}.fasta'.format(args.outputdir, motif_counter), 'w') as fh:
-				for seq_idx in subset.index:
-					fh.write('>seq_{0}\n{1}\n'.format(seq_idx, total['sequence'][seq_idx]))
-			subprocess.call('{0}/resources/weblogo/seqlogo -c -F PDF -w 50 -f {1}/step3/logo_{2}.fasta > {1}/step3/motif_{2}.pdf'.format(args.pathrepository, args.outputdir, motif_counter), shell=True)
+			
 			motif_counter += 1
-	columns = ['motif_id','num_supporting_seqs','mean_copynumber','stdev_copynumber','PK_compatibility','dot_bracket_notation','sequence_mode','mode_neighborhood_occupancy']
+	conn.close()
+
+	columns = ['motif_id','num_supporting_seqs','mean_copynumber','stdev_copynumber','PK_compatibility','pkiss_dot_bracket','pkiss_MFE','sequence_mode','mode_neighborhood_occupancy']
 	pd.DataFrame(motif_table, columns=columns).to_csv('{0}/step3/table_motifs.tsv'.format(args.outputdir), index=False, sep='\t')
-
-
-	# num_outcomes = 1
-	# exposures = cluster_names
-	# prevalent_PKs_by_cluster = {}
-	# for c in cluster_names:
-	# 	prevalent_PKs_by_cluster[c] = list(total[total[c] == 1][feature_names].sum(axis=0).sort(inplace=False, ascending=False).index)[:num_outcomes]
-
-	# num_factors = num_outcomes * len(exposures)
-	# fisher_ORs = []
-	# fisher_pvals = []
-
-	# for e in exposures:
-	# 	outcomes = prevalent_PKs_by_cluster[e]
-	# 	for o in outcomes:
-	# 		ab = len(total[total[e] == 1])
-	# 		a = total[total[e] == 1][o].sum()
-	# 		b = ab - a
-	# 		cd = len(total[total[e] == 0])
-	# 		c = total[total[e] == 0][o].sum()
-	# 		d = cd - c
-	# 		contingency_table = np.array([[a,b],[c,d]])
-	# 		odds_ratio, pval = fisher_exact(contingency_table)
-	# 		fisher_pvals.append(pval)
-	# 		fisher_ORs.append(odds_ratio)
-
-	# sig_idx = list(np.where(fdrcorrection0(fisher_pvals)[0] == True)[0])

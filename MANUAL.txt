@@ -1,22 +1,38 @@
 Requirements:
+- UNIX like operating system
+- ghostscript with X11 support
 - python 2.7.x
 - numpy
 - pandas
-- scipy
-- statsmodels
-- scikit-learn
 - matplotlib
-- seaborn
 - biopython
+- an internet connection
 
 Setup:
 the frameshift executable contains the entire analysis pipeline, and relies on the directory structure of this repository (do not alter).
-a sample configuration file is provided in this repository (config_sample.json) as a starting point for your runs.
+a sample configuration file is provided in this repository (config_sample.json).
+
 
 
 Usage:
 
+$PATH_TO_REPO/frameshift -c config.json -p $PATH_TO_REPO -o output_folder -s 1 -i illumina_data.fastq.gz
+$PATH_TO_REPO/frameshift -c config.json -p $PATH_TO_REPO -o output_folder -s 2 -n 5000
+$PATH_TO_REPO/frameshift -c config.json -p $PATH_TO_REPO -o output_folder -s 3 -n 5000
+
 
 Output:
 
-
+step1/
+	abundances.txt
+	library_mass_by_rank.pdf
+step2/
+	PK_compatibilities.tsv
+step3/
+	logo_1.fasta
+	logo_2.fasta
+	...
+	motif_1.pdf
+	motif_2.pdf
+	...
+	table_motifs.tsv
