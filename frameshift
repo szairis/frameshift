@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from Bio import Seq
+from scipy.stats import entropy
 
 parser = argparse.ArgumentParser(description='nominate frameshift promoting pseudoknot motifs')
 parser.add_argument('-p', '--pathrepository', required=True,
@@ -127,30 +128,30 @@ def gen_PK_compatibility_fs(seq_list, PK_feature_set):
     return feature_space
 
 def get_dot_bracket(pk_string):
-    if pk_string == 'None':
-        return 'None'
-    else:
-        u, s1, l1, s2, l2, l3, d = tuple(pk_string.split('|'))
+	if pk_string == 'None':
+		return 'None'
+	else:
+		u, s1, l1, s2, l2, l3, d = tuple(pk_string.split('|'))
 		db_string = []
 		for n in range(int(u)):
-	    	db_string.append('.')
-	    for n in range(int(s1)):
-	    	db_string.append('[')
-		for n in range(int(l1)):
-	    	db_string.append('.')
-		for n in range(int(s2)):
-	    	db_string.append('{')
-		for n in range(int(l2)):
-	    	db_string.append('.')
+			db_string.append('.')
 		for n in range(int(s1)):
-	    	db_string.append(']')
-		for n in range(int(l3)):
-	    	db_string.append('.')
+			db_string.append('[')
+		for n in range(int(l1)):
+			db_string.append('.')
 		for n in range(int(s2)):
-	    	db_string.append('}')
+			db_string.append('{')
+		for n in range(int(l2)):
+			db_string.append('.')
+		for n in range(int(s1)):
+			db_string.append(']')
+		for n in range(int(l3)):
+			db_string.append('.')
+		for n in range(int(s2)):
+			db_string.append('}')
 		for n in range(int(d)):
-	    	db_string.append('.')
-    return ''.join(db_string)
+			db_string.append('.')
+	return ''.join(db_string)
 
 def neighborhood_2(seq, variable_positions):
     var_pos = map(lambda x: x - 1, variable_positions)
@@ -180,6 +181,11 @@ def neighborhood_2(seq, variable_positions):
         centroid[comb[1]] = wt_j
     
     return neighbors
+
+def get_norm_entropy(x):
+	prob_vector_x = x / float(x.sum())
+	prob_vector_uniform = np.ones((len(x),)) / len(x)
+	return entropy(prob_vector_x) / entropy(prob_vector_uniform)
 
 
 if args.step.find('1') > -1:
@@ -245,7 +251,10 @@ if args.step.find('3') > -1:
 	
 	mean_abundances = []
 	for feat in observed_PKs:
-		mean_abundances.append(total.groupby(feat).mean()['copy_number'][1])
+		mean_abundance = 0
+		if len(total[total[feat] == 1]) > 0:
+			mean_abundance = list(total.groupby(feat).mean()['copy_number'])[1]
+		mean_abundances.append(mean_abundance)
 	mean_abundances = np.array(mean_abundances)
 	np.savetxt('{0}/tmp/mean_abundances.txt'.format(args.outputdir), mean_abundances)
 
@@ -286,15 +295,16 @@ if args.step.find('3') > -1:
 					clustering[PK]['cluster_{0}'.format(c_num)][row] = 1
 
 	num_motifs = sum([num_clusters[pk] for pk in nominees_PK])
+	print 'beginning motif nomination from a pool of {0} candidates total'.format(num_motifs)
 	motif_table = { 'motif_id':[],
 					'num_supporting_seqs':[],
 					'mean_copynumber':[],
 					'stdev_copynumber':[],
 					'PK_compatibility':[],
-					'pkiss_dot_bracket':[],
-					'pkiss_MFE':[],
+					'dot_bracket':[],
 					'sequence_mode':[],
-					'mode_neighborhood_occupancy':[]
+					'mode_neighborhood_occupancy':[],
+					'mode_neighborhood_norm_entropy':[]
 					}
 	motif_counter = 1
 	conn = httplib.HTTPConnection('bibiserv2.cebitec.uni-bielefeld.de', 80, timeout=1000)
@@ -302,7 +312,6 @@ if args.step.find('3') > -1:
 	header_plain = {'Content-type': 'text/plain'}
 	for PK in nominees_PK:
 		for c in clustering[PK].columns:
-			print 'calculating motif {0} / {1}'.format(motif_counter, num_motifs)
 			subset = clustering[PK][clustering[PK][c] == 1]
 			n = len(subset)
 			mu_CN = total.ix[subset.index, 'copy_number'].mean()
@@ -325,43 +334,45 @@ if args.step.find('3') > -1:
 				fh.write('\t}\n')
 				fh.write('}\n')
 			
-			conn.request('POST', '/rest/pkiss/pkiss_function_mfe/request', open(pkiss_input_filename, 'rb'), header_json)
+			conn.request('POST', '/rest/pkiss/pkiss_function_subopt/request', open(pkiss_input_filename, 'rb'), header_json)
 			job_id = conn.getresponse().read()
 			time.sleep(2)
 			statuscode = 0
 			while statuscode != 600:
-				conn.request('POST', '/rest/pkiss/pkiss_function_mfe/statuscode', job_id, header_plain)
+				conn.request('POST', '/rest/pkiss/pkiss_function_subopt/statuscode', job_id, header_plain)
 				statuscode = int(conn.getresponse().read())
 				time.sleep(2)
 
-			conn.request('POST', '/rest/pkiss/pkiss_function_mfe/response', job_id, header_plain)
-			pkiss_output = conn.getresponse().read().strip().split('\n')[-1]
-			mfe = float(pkiss_output.strip().split()[0])
-			dot_bracket = pkiss_output.strip().split()[1]
+			conn.request('POST', '/rest/pkiss/pkiss_function_subopt/response', job_id, header_plain)
+			pkiss_output = conn.getresponse().read().strip().split('\n')[2:]
+			subopt_energies = [float(line.strip().split()[0]) for line in pkiss_output]
+			subopt_structures = [line.strip().split()[1] for line in pkiss_output]
 
-			occupancy = 0
-			observed = list(abundances['sequence'])
-			for seq in neighborhood_2(mode_seq, [5,6,7,11,12,13,14,15,16,17,18,29,30,31]):
-				if seq in observed:
-					occupancy += 1
-			
-			with open('{0}/step3/logo_{1}.fasta'.format(args.outputdir, motif_counter), 'w') as fh:
-				for seq_idx in subset.index:
-					fh.write('>seq_{0}\n{1}\n'.format(seq_idx, total['sequence'][seq_idx]))
-			subprocess.call('{0}/resources/weblogo/seqlogo -c -F PDF -w 50 -f {1}/step3/logo_{2}.fasta > {1}/step3/motif_{2}.pdf'.format(args.pathrepository, args.outputdir, motif_counter), shell=True)
+			if get_dot_bracket(PK) in subopt_structures:
+				print 'identified motif {0}'.format(motif_counter)
+				occupancy = 0
+				observed = list(abundances['sequence'])
+				for seq in neighborhood_2(mode_seq, [5,6,7,11,12,13,14,15,16,17,18,29,30,31]):
+					if seq in observed:
+						occupancy += 1
+				
+				with open('{0}/step3/logo_{1}.fasta'.format(args.outputdir, motif_counter), 'w') as fh:
+					for seq_idx in subset.index:
+						fh.write('>seq_{0}\n{1}\n'.format(seq_idx, total['sequence'][seq_idx]))
+				subprocess.call('{0}/resources/weblogo/seqlogo -c -F PDF -w 50 -f {1}/step3/logo_{2}.fasta > {1}/step3/motif_{2}.pdf'.format(args.pathrepository, args.outputdir, motif_counter), shell=True)
 
-			motif_table['motif_id'].append(motif_counter)
-			motif_table['num_supporting_seqs'].append(n)
-			motif_table['mean_copynumber'].append(mu_CN)
-			motif_table['stdev_copynumber'].append(sigma_CN)
-			motif_table['PK_compatibility'].append(PK)
-			motif_table['pkiss_dot_bracket'].append(dot_bracket)
-			motif_table['pkiss_MFE'].append(mfe)
-			motif_table['sequence_mode'].append(mode_seq)
-			motif_table['mode_neighborhood_occupancy'].append(occupancy / 861.0)
-			
-			motif_counter += 1
+				motif_table['motif_id'].append(motif_counter)
+				motif_table['num_supporting_seqs'].append(n)
+				motif_table['mean_copynumber'].append(mu_CN)
+				motif_table['stdev_copynumber'].append(sigma_CN)
+				motif_table['PK_compatibility'].append(PK)
+				motif_table['dot_bracket'].append(get_dot_bracket(PK))
+				motif_table['sequence_mode'].append(mode_seq)
+				motif_table['mode_neighborhood_occupancy'].append(occupancy / 861.0)
+				motif_table['mode_neighborhood_norm_entropy'].append(get_norm_entropy(np.array(total.ix[subset.index, 'copy_number'])))
+				
+				motif_counter += 1
 	conn.close()
-
-	columns = ['motif_id','num_supporting_seqs','mean_copynumber','stdev_copynumber','PK_compatibility','pkiss_dot_bracket','pkiss_MFE','sequence_mode','mode_neighborhood_occupancy']
+	print 'motif identification complete'
+	columns = ['motif_id','num_supporting_seqs','mean_copynumber','stdev_copynumber','PK_compatibility','dot_bracket','sequence_mode','mode_neighborhood_occupancy','mode_neighborhood_norm_entropy']
 	pd.DataFrame(motif_table, columns=columns).to_csv('{0}/step3/table_motifs.tsv'.format(args.outputdir), index=False, sep='\t')
