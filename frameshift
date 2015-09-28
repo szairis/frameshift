@@ -31,10 +31,16 @@ args = parser.parse_args()
 with open(args.configfile) as fh:
 	config = json.load(fh)
 
-if not exists(args.outputdir):
+if not exists(args.outputdir + '/step1'):
 	makedirs(args.outputdir + '/step1')
+
+if not exists(args.outputdir + '/step2'):
 	makedirs(args.outputdir + '/step2')
+
+if not exists(args.outputdir + '/step3'):
 	makedirs(args.outputdir + '/step3')
+
+if not exists(args.outputdir + '/tmp'):
 	makedirs(args.outputdir + '/tmp')
 
 def is_revcomp(seq1, seq2):
@@ -242,7 +248,7 @@ if args.step.find('3') > -1:
 
 	abundances_PK_initial = pd.read_csv('{0}/resources/abundances_PK_initial.txt'.format(args.pathrepository),
 		sep='\t', index_col=2, names=['copy_number_initial','feature_name_initial'])
-	abundances_PK_selection = pd.read_csv('{0}/resources/abundances_PK_selection.txt'.format(args.pathrepository),
+	abundances_PK_selection = pd.read_csv('{0}/resources/abundances_PK_fs1.txt'.format(args.pathrepository),
 		sep='\t', index_col=2, names=['copy_number_selection','feature_name_selection'])
 	prepost_selection = pd.concat([abundances_PK_initial, abundances_PK_selection], axis=1, join='inner').sort('copy_number_initial', ascending=True, inplace=False)
 
