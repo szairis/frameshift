@@ -221,7 +221,7 @@ if args.step.find('1') > -1:
     plt.title('Percentage of Library in First X Sequences')
     plt.legend(loc='best')
     plt.tight_layout()
-    plt.savefig('{0}/step1/library_mass_by_rank.pdf'.format(args.outputdir))
+    plt.savefig('{0}/step1/library_mass_by_rank.png'.format(args.outputdir))
 
 
 if args.step.find('2') > -1:
@@ -444,14 +444,14 @@ if args.step.find('4') > -1:
     plt.ylabel('$\sqrt[3]{abundance}$')
     plt.title('Single Nucleotide Variants of Sequence:\n{0}'.format(args.motifseq))
     plt.tight_layout()
-    plt.savefig('{0}/step4/mut_single.pdf'.format(args.outputdir))
+    plt.savefig('{0}/step4/mut_single.png'.format(args.outputdir))
     plt.clf()
     neighbor_1.to_csv('{0}/step4/mut_single.csv'.format(args.outputdir))
 
     sn.heatmap(neighbor_2)
     plt.title('Pairwise Nucleotide Variants of Sequence:\n{0}'.format(args.motifseq))
     plt.tight_layout()
-    plt.savefig('{0}/step4/mut_pairwise.pdf'.format(args.outputdir))
+    plt.savefig('{0}/step4/mut_pairwise.png'.format(args.outputdir))
     neighbor_2.to_csv('{0}/step4/mut_pairwise.csv'.format(args.outputdir))
 
 print '------------'
