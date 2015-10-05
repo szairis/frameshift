@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 from os.path import exists
-from os import makedirs
+from os import makedirs, environ
 import subprocess
 import argparse
 import json
@@ -10,38 +10,34 @@ from itertools import product, combinations
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import seaborn as sn
+sn.set_context('paper')
+sn.set_style('whitegrid')
 from Bio import Seq
 from scipy.stats import entropy
 
 parser = argparse.ArgumentParser(description='nominate frameshift promoting pseudoknot motifs')
-parser.add_argument('-p', '--pathrepository', required=True,
-	help='path to the frameshift repository')
 parser.add_argument('-c', '--configfile', required=True,
-	help='path to configuration json')
+    help='path to configuration json')
 parser.add_argument('-s', '--step', required=True,
-	help='step of the pipeline to run')
+    help='step of the pipeline to run')
 parser.add_argument('-o', '--outputdir', required=True,
-	help='directory to write output files')
+    help='directory to write output files')
 parser.add_argument('-i', '--inputdata', required=False,
-	help='input fastq.gz sequencing data')
+    help='input fastq.gz sequencing data')
 parser.add_argument('-n', '--numseq', required=False, default=1000,
-	help='number of most abundant sequences to analyze')
+    help='number of most abundant sequences to analyze')
+parser.add_argument('-m', '--motifseq', required=False,
+    help='nucleotide sequence to submit for variant analysis')
 args = parser.parse_args()
 
 with open(args.configfile) as fh:
-	config = json.load(fh)
-
-if not exists(args.outputdir + '/step1'):
-	makedirs(args.outputdir + '/step1')
-
-if not exists(args.outputdir + '/step2'):
-	makedirs(args.outputdir + '/step2')
-
-if not exists(args.outputdir + '/step3'):
-	makedirs(args.outputdir + '/step3')
+    config = json.load(fh)
 
 if not exists(args.outputdir + '/tmp'):
-	makedirs(args.outputdir + '/tmp')
+    makedirs(args.outputdir + '/tmp')
+
+code_directory = environ['FRAMESHIFT_DIR']
 
 def is_revcomp(seq1, seq2):
     answer = True
@@ -134,36 +130,35 @@ def gen_PK_compatibility_fs(seq_list, PK_feature_set):
     return feature_space
 
 def get_dot_bracket(pk_string):
-	if pk_string == 'None':
-		return 'None'
-	else:
-		u, s1, l1, s2, l2, l3, d = tuple(pk_string.split('|'))
-		db_string = []
-		for n in range(int(u)):
-			db_string.append('.')
-		for n in range(int(s1)):
-			db_string.append('[')
-		for n in range(int(l1)):
-			db_string.append('.')
-		for n in range(int(s2)):
-			db_string.append('{')
-		for n in range(int(l2)):
-			db_string.append('.')
-		for n in range(int(s1)):
-			db_string.append(']')
-		for n in range(int(l3)):
-			db_string.append('.')
-		for n in range(int(s2)):
-			db_string.append('}')
-		for n in range(int(d)):
-			db_string.append('.')
-	return ''.join(db_string)
+    if pk_string == 'None':
+        return 'None'
+    else:
+        u, s1, l1, s2, l2, l3, d = tuple(pk_string.split('|'))
+        db_string = []
+        for n in range(int(u)):
+            db_string.append('.')
+        for n in range(int(s1)):
+            db_string.append('[')
+        for n in range(int(l1)):
+            db_string.append('.')
+        for n in range(int(s2)):
+            db_string.append('{')
+        for n in range(int(l2)):
+            db_string.append('.')
+        for n in range(int(s1)):
+            db_string.append(']')
+        for n in range(int(l3)):
+            db_string.append('.')
+        for n in range(int(s2)):
+            db_string.append('}')
+        for n in range(int(d)):
+            db_string.append('.')
+        return ''.join(db_string)
 
-def neighborhood_2(seq, variable_positions):
-    var_pos = map(lambda x: x - 1, variable_positions)
+def get_neighborhood(seq, variable_positions):
     centroid = list(seq)
     neighbors = []
-    for i in var_pos:
+    for i in variable_positions:
         wt = centroid[i]
         menu = set(['A','C','G','T'])
         menu.remove(wt)
@@ -171,7 +166,7 @@ def neighborhood_2(seq, variable_positions):
             centroid[i] = j
             neighbors.append(''.join(centroid))
         centroid[i] = wt
-    for comb in combinations(var_pos, 2):
+    for comb in combinations(variable_positions, 2):
         wt_i = centroid[comb[0]]
         wt_j = centroid[comb[1]]
         menu_i = set(['A','C','G','T'])
@@ -188,197 +183,276 @@ def neighborhood_2(seq, variable_positions):
     
     return neighbors
 
+def get_nucleotide_substitutions(seq1, seq2):
+    subs = []
+    for p in range(len(seq1)):
+        if seq1[p] != seq2[p]:
+            subs.append('{0}{1}'.format(p+1, seq2[p]))
+    return subs
+
 def get_norm_entropy(x):
-	prob_vector_x = x / float(x.sum())
-	prob_vector_uniform = np.ones((len(x),)) / len(x)
-	return entropy(prob_vector_x) / entropy(prob_vector_uniform)
+    prob_vector_x = x / float(x.sum())
+    prob_vector_uniform = np.ones((len(x),)) / len(x)
+    return entropy(prob_vector_x) / entropy(prob_vector_uniform)
 
 
 if args.step.find('1') > -1:
-	print 'STEP 1: Calculating Sequence Abundances'
-	cmd_1_1 = 'gunzip -c {0} | grep -o "{1}" | grep -v "N" > {2}/tmp/scaffold_wt.txt'.format(args.inputdata, config['scaffold'], args.outputdir)
-	subprocess.call(cmd_1_1, shell=True)
-	cmd_1_2 = 'sort {0}/tmp/scaffold_wt.txt | uniq -c | sort -nr | sed "s/ T/	T/" | sed "s/ C/	C/" | sed "s/ G/	G/" | sed "s/ A/	A/" > {0}/step1/abundances.txt'.format(args.outputdir)
-	subprocess.call(cmd_1_2, shell=True)
-	subprocess.call(['rm', '{0}/tmp/scaffold_wt.txt'.format(args.outputdir)])
+    print 'STEP 1: Calculating Sequence Abundances'
+    
+    if not exists(args.outputdir + '/step1'):
+        makedirs(args.outputdir + '/step1')
 
-	abundances = pd.read_csv('{0}/step1/abundances.txt'.format(args.outputdir), sep='\t', header=None, names=['copy_number','sequence'])
-	num_sequences_needed = np.where(np.array(np.cumsum(abundances['copy_number']) / abundances['copy_number'].sum()) >= config['top_fraction'])[0][0]
-	print '{0} of the library is contained in the top {1} most abundant sequences'.format(config['top_fraction'], num_sequences_needed)
-	
-	plt.plot(np.cumsum(abundances['copy_number']) / abundances['copy_number'].sum(), alpha=1.0, label='top {0} contains {1}'.format(num_sequences_needed, config['top_fraction']))
-	plt.plot([num_sequences_needed]*int(100*config['top_fraction']), np.arange(0, config['top_fraction'], 0.01), 'k--', alpha=0.3)
-	plt.plot(np.arange(1, num_sequences_needed + 1), [config['top_fraction']]*num_sequences_needed, 'k--', alpha=0.3)
-	plt.yscale('log')
-	plt.xscale('log')
-	plt.grid('off')
-	plt.title('Percentage of Library in First X Sequences')
-	plt.legend(loc='best')
-	plt.tight_layout()
-	plt.savefig('{0}/step1/library_mass_by_rank.pdf'.format(args.outputdir))
+    cmd_1_1 = 'gunzip -c {0} | grep -o "{1}" | grep -v "N" > {2}/tmp/scaffold_wt.txt'.format(args.inputdata, config['scaffold'], args.outputdir)
+    subprocess.call(cmd_1_1, shell=True)
+    cmd_1_2 = 'sort {0}/tmp/scaffold_wt.txt | uniq -c | sort -nr | sed "s/ T/	T/" | sed "s/ C/	C/" | sed "s/ G/	G/" | sed "s/ A/	A/" > {0}/step1/abundances.txt'.format(args.outputdir)
+    subprocess.call(cmd_1_2, shell=True)
+    subprocess.call(['rm', '{0}/tmp/scaffold_wt.txt'.format(args.outputdir)])
+
+    abundances = pd.read_csv('{0}/step1/abundances.txt'.format(args.outputdir), sep='\t', header=None, names=['copy_number','sequence'])
+    num_sequences_needed = np.where(np.array(np.cumsum(abundances['copy_number']) / abundances['copy_number'].sum()) >= config['top_fraction'])[0][0]
+    print '{0} of the library is contained in the top {1} most abundant sequences'.format(config['top_fraction'], num_sequences_needed)
+
+    plt.plot(np.cumsum(abundances['copy_number']) / abundances['copy_number'].sum(), alpha=1.0, label='top {0} contains {1}'.format(num_sequences_needed, config['top_fraction']))
+    plt.plot([num_sequences_needed]*int(100*config['top_fraction']), np.arange(0, config['top_fraction'], 0.01), 'k--', alpha=0.3)
+    plt.plot(np.arange(1, num_sequences_needed + 1), [config['top_fraction']]*num_sequences_needed, 'k--', alpha=0.3)
+    plt.yscale('log')
+    plt.xscale('log')
+    plt.grid('off')
+    plt.title('Percentage of Library in First X Sequences')
+    plt.legend(loc='best')
+    plt.tight_layout()
+    plt.savefig('{0}/step1/library_mass_by_rank.pdf'.format(args.outputdir))
 
 
 if args.step.find('2') > -1:
-	print 'STEP 2: Pseudoknot Compatibility'
-	abundances = pd.read_csv('{0}/step1/abundances.txt'.format(args.outputdir), sep='\t', header=None, names=['copy_number','sequence'])[:int(args.numseq)]
-	
-	seq_list = list(abundances['sequence'])
-	scaffold = config['scaffold'].replace('.','N')
-	U = range(int(config['PK_compatibility']['U_range'][0]), int(config['PK_compatibility']['U_range'][1]) + 1)
-	S1 = range(int(config['PK_compatibility']['S1_range'][0]), int(config['PK_compatibility']['S1_range'][1]) + 1)
-	L1 = range(int(config['PK_compatibility']['L1_range'][0]), int(config['PK_compatibility']['L1_range'][1]) + 1)
-	S2 = range(int(config['PK_compatibility']['S2_range'][0]), int(config['PK_compatibility']['S2_range'][1]) + 1)
-	L2 = range(int(config['PK_compatibility']['L2_range'][0]), int(config['PK_compatibility']['L2_range'][1]) + 1)
-	L3 = range(int(config['PK_compatibility']['L3_range'][0]), int(config['PK_compatibility']['L3_range'][1]) + 1)
-	D = range(int(config['PK_compatibility']['D_range'][0]), int(config['PK_compatibility']['D_range'][1]) + 1)
-	
-	feature_names = PK_compatible_present(scaffold, U, S1, L1, S2, L2, L3, D)
-	print '{0} pseudoknot geometries being tested for compatibility'.format(len(feature_names))
-	featspace_pkcompat = gen_PK_compatibility_fs(seq_list, feature_names)
-	featspace_pkcompat.to_csv('{0}/step2/PK_compatibility.tsv'.format(args.outputdir), index=False, sep='\t')
+    print 'STEP 2: Pseudoknot Compatibility'
+    
+    if not exists(args.outputdir + '/step2'):
+        makedirs(args.outputdir + '/step2')
+
+    abundances = pd.read_csv('{0}/step1/abundances.txt'.format(args.outputdir), sep='\t', header=None, names=['copy_number','sequence'])[:int(args.numseq)]
+
+    seq_list = list(abundances['sequence'])
+    scaffold = config['scaffold'].replace('.','N')
+    U = config['PK_compatibility']['U_values']
+    S1 = config['PK_compatibility']['S1_values']
+    L1 = config['PK_compatibility']['L1_values']
+    S2 = config['PK_compatibility']['S2_values']
+    L2 = config['PK_compatibility']['L2_values']
+    L3 = config['PK_compatibility']['L3_values']
+    D = config['PK_compatibility']['D_values']
+
+    feature_names = PK_compatible_present(scaffold, U, S1, L1, S2, L2, L3, D)
+    print '{0} pseudoknot geometries being tested for compatibility'.format(len(feature_names))
+    featspace_pkcompat = gen_PK_compatibility_fs(seq_list, feature_names)
+    featspace_pkcompat.to_csv('{0}/step2/PK_compatibility.tsv'.format(args.outputdir), index=False, sep='\t')
 
 
 if args.step.find('3') > -1:
-	print 'STEP 3: Sequence Clustering and Motif Nomination'
-	
-	abundances = pd.read_csv('{0}/step1/abundances.txt'.format(args.outputdir), sep='\t', header=None, names=['copy_number','sequence'])[:int(args.numseq)]
-	featspace_pkcompat = pd.read_csv('{0}/step2/PK_compatibility.tsv'.format(args.outputdir), sep='\t')
-	feature_names = list(featspace_pkcompat.columns)
-	total = pd.concat([abundances, featspace_pkcompat], axis=1, join='inner')
+    print 'STEP 3: Sequence Clustering and Motif Nomination'
+    
+    if not exists(args.outputdir + '/step3'):
+        makedirs(args.outputdir + '/step3')
 
-	abundances_PK_initial = pd.read_csv('{0}/resources/abundances_PK_initial.txt'.format(args.pathrepository),
-		sep='\t', index_col=2, names=['copy_number_initial','feature_name_initial'])
-	abundances_PK_selection = pd.read_csv('{0}/resources/abundances_PK_fs1.txt'.format(args.pathrepository),
-		sep='\t', index_col=2, names=['copy_number_selection','feature_name_selection'])
-	prepost_selection = pd.concat([abundances_PK_initial, abundances_PK_selection], axis=1, join='inner').sort('copy_number_initial', ascending=True, inplace=False)
+    abundances = pd.read_csv('{0}/step1/abundances.txt'.format(args.outputdir), sep='\t', header=None, names=['copy_number','sequence'])[:int(args.numseq)]
+    featspace_pkcompat = pd.read_csv('{0}/step2/PK_compatibility.tsv'.format(args.outputdir), sep='\t')
+    feature_names = list(featspace_pkcompat.columns)
+    total = pd.concat([abundances, featspace_pkcompat], axis=1, join='inner')
 
-	observed_PKs = list(featspace_pkcompat.sum(axis=0)[featspace_pkcompat.sum(axis=0) > 0].sort(1, inplace=False, ascending=False).index)
-	print '{0} different PK compatibilities observed in top {1} sequences'.format(len(observed_PKs), args.numseq)
-	
-	mean_abundances = []
-	for feat in observed_PKs:
-		mean_abundance = 0
-		if len(total[total[feat] == 1]) > 0:
-			mean_abundance = list(total.groupby(feat).mean()['copy_number'])[1]
-		mean_abundances.append(mean_abundance)
-	mean_abundances = np.array(mean_abundances)
-	np.savetxt('{0}/tmp/mean_abundances.txt'.format(args.outputdir), mean_abundances)
+    abundances_PK_initial = pd.read_csv('{0}/resources/abundances_PK_initial.txt'.format(code_directory),
+        sep='\t', index_col=2, names=['copy_number_initial','feature_name_initial'])
+    abundances_PK_selection = pd.read_csv('{0}/resources/abundances_PK_fs1.txt'.format(code_directory),
+        sep='\t', index_col=2, names=['copy_number_selection','feature_name_selection'])
+    prepost_selection = pd.concat([abundances_PK_initial, abundances_PK_selection], axis=1, join='inner').sort('copy_number_initial', ascending=True, inplace=False)
 
-	thresh = 0.05
-	percentile_enrichment = int(thresh * len(prepost_selection))
-	percentile_mean_abundance = np.sort(mean_abundances)[::-1][int(thresh * len(mean_abundances))]
-	enrichments = (prepost_selection['copy_number_selection'] / prepost_selection['copy_number_selection'].sum()) / (prepost_selection['copy_number_initial'] / prepost_selection['copy_number_initial'].sum())
-	enrich_set = set(prepost_selection.ix[enrichments.sort(0, inplace=False, ascending=False).index[:percentile_enrichment], 'feature_name_selection'])
-	abundance_set = set([observed_PKs[i] for i in np.nonzero(mean_abundances > percentile_mean_abundance)[0]])
-	nominees_PK = set.intersection(enrich_set, abundance_set)
+    observed_PKs = list(featspace_pkcompat.sum(axis=0)[featspace_pkcompat.sum(axis=0) > 0].sort(1, inplace=False, ascending=False).index)
+    print '{0} different PK compatibilities observed in top {1} sequences'.format(len(observed_PKs), args.numseq)
+    
+    mean_abundances = []
+    for feat in observed_PKs:
+        mean_abundance = 0
+        if len(total[total[feat] == 1]) > 0:
+            mean_abundance = list(total.groupby(feat).mean()['copy_number'])[1]
+        mean_abundances.append(mean_abundance)
+    mean_abundances = np.array(mean_abundances)
+    np.savetxt('{0}/tmp/mean_abundances.txt'.format(args.outputdir), mean_abundances)
 
-	PK_match_seqs = {}
-	PK_match_idx = {}
-	num_clusters = {}
-	for PK in nominees_PK:
-	    match_seqs = list(total[total[PK] == 1]['sequence'])
-	    match_idx = list(total[total[PK] == 1].index)
-	    PK_match_seqs[PK] = match_seqs
-	    PK_match_idx[PK] = match_idx
+    thresh = 0.05
+    percentile_enrichment = int(thresh * len(prepost_selection))
+    percentile_mean_abundance = np.sort(mean_abundances)[::-1][int(thresh * len(mean_abundances))]
+    enrichments = (prepost_selection['copy_number_selection'] / prepost_selection['copy_number_selection'].sum()) / (prepost_selection['copy_number_initial'] / prepost_selection['copy_number_initial'].sum())
+    enrich_set = set(prepost_selection.ix[enrichments.sort(0, inplace=False, ascending=False).index[:percentile_enrichment], 'feature_name_selection'])
+    abundance_set = set([observed_PKs[i] for i in np.nonzero(mean_abundances > percentile_mean_abundance)[0]])
+    nominees_PK = set.intersection(enrich_set, abundance_set)
 
-	    with open('{0}/tmp/PK_{1}.fasta'.format(args.outputdir, PK.replace('|','_')), 'w') as fastafile:
-	    	for idx, seq in zip(match_idx, match_seqs):
-	    		fastafile.write('>{0}\n{1}\n'.format(idx, seq))
-	    cmd = '{0}/resources/cdhit/cd-hit-est -i {1}/tmp/PK_{2}.fasta -o {1}/tmp/cdhit-{2} -c {3} >/dev/null 2>&1'.format(args.pathrepository, args.outputdir, PK.replace('|','_'), config['cluster_similarity_threshold'])
-	    subprocess.call(cmd, shell=True)
-	    num_clusters[PK] = int(subprocess.check_output(['wc', '-l', '{0}/tmp/cdhit-{1}'.format(args.outputdir, PK.replace('|','_'))]).split(args.outputdir)[0].strip()) / 2
-	    print '{0} cluster(s) detected for the {1} sequences matching {2}'.format(num_clusters[PK], len(match_seqs), PK)
-	
-	clustering = {}
-	for PK in nominees_PK:
-		clustering[PK] = pd.DataFrame(np.zeros((len(PK_match_seqs[PK]), num_clusters[PK])), index=PK_match_idx[PK], columns=['cluster_{0}'.format(i) for i in range(num_clusters[PK])])
-		with open('{0}/tmp/cdhit-{1}.clstr'.format(args.outputdir, PK.replace('|','_'))) as cd_hit:
-			for line in cd_hit:
-				if line[0] == '>':
-					c_num = line.strip().split()[-1]
-				else:
-					row = int(line.split('>')[1].split('...')[0])
-					clustering[PK]['cluster_{0}'.format(c_num)][row] = 1
+    PK_match_seqs = {}
+    PK_match_idx = {}
+    num_clusters = {}
+    for PK in nominees_PK:
+        match_seqs = list(total[total[PK] == 1]['sequence'])
+        match_idx = list(total[total[PK] == 1].index)
+        PK_match_seqs[PK] = match_seqs
+        PK_match_idx[PK] = match_idx
 
-	num_motifs = sum([num_clusters[pk] for pk in nominees_PK])
-	print 'beginning motif nomination from a pool of {0} candidates total'.format(num_motifs)
-	motif_table = { 'motif_id':[],
-					'num_supporting_seqs':[],
-					'mean_copynumber':[],
-					'stdev_copynumber':[],
-					'PK_compatibility':[],
-					'dot_bracket':[],
-					'sequence_mode':[],
-					'mode_neighborhood_occupancy':[],
-					'mode_neighborhood_norm_entropy':[]
-					}
-	motif_counter = 1
-	conn = httplib.HTTPConnection('bibiserv2.cebitec.uni-bielefeld.de', 80, timeout=1000)
-	header_json = {'Content-type': 'application/json'}
-	header_plain = {'Content-type': 'text/plain'}
-	for PK in nominees_PK:
-		for c in clustering[PK].columns:
-			subset = clustering[PK][clustering[PK][c] == 1]
-			n = len(subset)
-			mu_CN = total.ix[subset.index, 'copy_number'].mean()
-			sigma_CN = total.ix[subset.index, 'copy_number'].std()
-			mode_seq = total['sequence'][min(subset.index)]
-			
-			pkiss_input_filename = '{0}/tmp/motif_{1}.json'.format(args.outputdir, motif_counter)
-			with open(pkiss_input_filename, 'w') as fh:
-				fh.write('{\n')
-				fh.write('\t"pkiss_input_rna_sequences":">ID\\r\\n{0}",\n'.format(mode_seq))
-				fh.write('\t"paramset":{\n')
-				fh.write('\t\t"pkiss_parameter_allowLP":"0",\n')
-				fh.write('\t\t"pkiss_parameter_minHairpinLength":"2",\n')
-				fh.write('\t\t"pkiss_parameter_windowIncrement":"1",\n')
-				fh.write('\t\t"pkiss_parameter_Hpenalty":"9.0",\n')
-				fh.write('\t\t"pkiss_parameter_param":"rna_turner2004.par",\n')
-				fh.write('\t\t"pkiss_parameter_strategy":"P",\n')
-				fh.write('\t\t"pkiss_parameter_temperature":"37.0",\n')
-				fh.write('\t\t"pkiss_parameter_Kpenalty":"12.0"\n')
-				fh.write('\t}\n')
-				fh.write('}\n')
-			
-			conn.request('POST', '/rest/pkiss/pkiss_function_subopt/request', open(pkiss_input_filename, 'rb'), header_json)
-			job_id = conn.getresponse().read()
-			time.sleep(2)
-			statuscode = 0
-			while statuscode != 600:
-				conn.request('POST', '/rest/pkiss/pkiss_function_subopt/statuscode', job_id, header_plain)
-				statuscode = int(conn.getresponse().read())
-				time.sleep(2)
+        with open('{0}/tmp/PK_{1}.fasta'.format(args.outputdir, PK.replace('|','_')), 'w') as fastafile:
+            for idx, seq in zip(match_idx, match_seqs):
+                fastafile.write('>{0}\n{1}\n'.format(idx, seq))
+        cmd = '{0}/resources/cdhit/cd-hit-est -i {1}/tmp/PK_{2}.fasta -o {1}/tmp/cdhit-{2} -c {3} >/dev/null 2>&1'.format(code_directory, args.outputdir, PK.replace('|','_'), config['cluster_similarity_threshold'])
+        subprocess.call(cmd, shell=True)
+        num_clusters[PK] = int(subprocess.check_output(['wc', '-l', '{0}/tmp/cdhit-{1}'.format(args.outputdir, PK.replace('|','_'))]).split(args.outputdir)[0].strip()) / 2
+        print '{0} cluster(s) detected for the {1} sequences matching {2}'.format(num_clusters[PK], len(match_seqs), PK)
+    
+    clustering = {}
+    for PK in nominees_PK:
+        clustering[PK] = pd.DataFrame(np.zeros((len(PK_match_seqs[PK]), num_clusters[PK])), index=PK_match_idx[PK], columns=['cluster_{0}'.format(i) for i in range(num_clusters[PK])])
+        with open('{0}/tmp/cdhit-{1}.clstr'.format(args.outputdir, PK.replace('|','_'))) as cd_hit:
+            for line in cd_hit:
+                if line[0] == '>':
+                    c_num = line.strip().split()[-1]
+                else:
+                    row = int(line.split('>')[1].split('...')[0])
+                    clustering[PK]['cluster_{0}'.format(c_num)][row] = 1
 
-			conn.request('POST', '/rest/pkiss/pkiss_function_subopt/response', job_id, header_plain)
-			pkiss_output = conn.getresponse().read().strip().split('\n')[2:]
-			subopt_energies = [float(line.strip().split()[0]) for line in pkiss_output]
-			subopt_structures = [line.strip().split()[1] for line in pkiss_output]
+    num_motifs = sum([num_clusters[pk] for pk in nominees_PK])
+    print '{0} motifs identified'.format(num_motifs)
+    motif_table = { 'motif_id':[],
+                    'num_supporting_seqs':[],
+                    'mean_copynumber':[],
+                    'stdev_copynumber':[],
+                    'PK_compatibility':[],
+                    'dot_bracket':[],
+                    'pKiss_match':[],
+                    'sequence_mode':[],
+                    'mode_neighborhood_occupancy':[],
+                    'mode_neighborhood_norm_entropy':[]
+                    }
+    motif_counter = 1
+    conn = httplib.HTTPConnection('bibiserv2.cebitec.uni-bielefeld.de', 80, timeout=1000)
+    header_json = {'Content-type': 'application/json'}
+    header_plain = {'Content-type': 'text/plain'}
+    for PK in nominees_PK:
+        for c in clustering[PK].columns:
+            subset = clustering[PK][clustering[PK][c] == 1]
+            n = len(subset)
+            mu_CN = total.ix[subset.index, 'copy_number'].mean()
+            sigma_CN = total.ix[subset.index, 'copy_number'].std()
+            mode_seq = total['sequence'][min(subset.index)]
+            
+            pkiss_input_filename = '{0}/tmp/motif_{1}.json'.format(args.outputdir, motif_counter)
+            with open(pkiss_input_filename, 'w') as fh:
+                fh.write('{\n')
+                fh.write('\t"pkiss_input_rna_sequences":">ID\\r\\n{0}",\n'.format(mode_seq))
+                fh.write('\t"paramset":{\n')
+                fh.write('\t\t"pkiss_parameter_allowLP":"0",\n')
+                fh.write('\t\t"pkiss_parameter_minHairpinLength":"2",\n')
+                fh.write('\t\t"pkiss_parameter_windowIncrement":"1",\n')
+                fh.write('\t\t"pkiss_parameter_Hpenalty":"9.0",\n')
+                fh.write('\t\t"pkiss_parameter_param":"rna_turner2004.par",\n')
+                fh.write('\t\t"pkiss_parameter_strategy":"P",\n')
+                fh.write('\t\t"pkiss_parameter_temperature":"30.0",\n')
+                fh.write('\t\t"pkiss_parameter_Kpenalty":"12.0"\n')
+                fh.write('\t}\n')
+                fh.write('}\n')
+            
+            conn.request('POST', '/rest/pkiss/pkiss_function_subopt/request', open(pkiss_input_filename, 'rb'), header_json)
+            job_id = conn.getresponse().read()
+            time.sleep(2)
+            statuscode = 0
+            while statuscode != 600:
+                conn.request('POST', '/rest/pkiss/pkiss_function_subopt/statuscode', job_id, header_plain)
+                statuscode = int(conn.getresponse().read())
+                time.sleep(2)
 
-			if get_dot_bracket(PK) in subopt_structures:
-				print 'identified motif {0}'.format(motif_counter)
-				occupancy = 0
-				observed = list(abundances['sequence'])
-				for seq in neighborhood_2(mode_seq, [5,6,7,11,12,13,14,15,16,17,18,29,30,31]):
-					if seq in observed:
-						occupancy += 1
-				
-				with open('{0}/step3/logo_{1}.fasta'.format(args.outputdir, motif_counter), 'w') as fh:
-					for seq_idx in subset.index:
-						fh.write('>seq_{0}\n{1}\n'.format(seq_idx, total['sequence'][seq_idx]))
-				subprocess.call('{0}/resources/weblogo/seqlogo -c -F PDF -w 50 -f {1}/step3/logo_{2}.fasta > {1}/step3/motif_{2}.pdf'.format(args.pathrepository, args.outputdir, motif_counter), shell=True)
+            conn.request('POST', '/rest/pkiss/pkiss_function_subopt/response', job_id, header_plain)
+            pkiss_output = conn.getresponse().read().strip().split('\n')[2:]
+            subopt_energies = [float(line.strip().split()[0]) for line in pkiss_output]
+            subopt_structures = [line.strip().split()[1] for line in pkiss_output]
+            if get_dot_bracket(PK) in subopt_structures:
+                pkiss_presence = 1
+            else:
+                pkiss_presence = 0
 
-				motif_table['motif_id'].append(motif_counter)
-				motif_table['num_supporting_seqs'].append(n)
-				motif_table['mean_copynumber'].append(mu_CN)
-				motif_table['stdev_copynumber'].append(sigma_CN)
-				motif_table['PK_compatibility'].append(PK)
-				motif_table['dot_bracket'].append(get_dot_bracket(PK))
-				motif_table['sequence_mode'].append(mode_seq)
-				motif_table['mode_neighborhood_occupancy'].append(occupancy / 861.0)
-				motif_table['mode_neighborhood_norm_entropy'].append(get_norm_entropy(np.array(total.ix[subset.index, 'copy_number'])))
-				
-				motif_counter += 1
-	conn.close()
-	print 'motif identification complete'
-	columns = ['motif_id','num_supporting_seqs','mean_copynumber','stdev_copynumber','PK_compatibility','dot_bracket','sequence_mode','mode_neighborhood_occupancy','mode_neighborhood_norm_entropy']
-	pd.DataFrame(motif_table, columns=columns).to_csv('{0}/step3/table_motifs.tsv'.format(args.outputdir), index=False, sep='\t')
+            print 'querying pKiss for motif {0}'.format(motif_counter)
+            occupancy = 0
+            observed = list(abundances['sequence'])
+            variable_positions = [idx for idx in range(len(config['scaffold'])) if config['scaffold'][idx] == '.']
+            for seq in get_neighborhood(mode_seq, variable_positions):
+                if seq in observed:
+                    occupancy += 1
+            
+            with open('{0}/step3/logo_{1}.fasta'.format(args.outputdir, motif_counter), 'w') as fh:
+                for seq_idx in subset.index:
+                    fh.write('>seq_{0}\n{1}\n'.format(seq_idx, total['sequence'][seq_idx]))
+            subprocess.call('{0}/resources/weblogo/seqlogo -c -F PDF -w 50 -f {1}/step3/logo_{2}.fasta > {1}/step3/motif_{2}.pdf'.format(code_directory, args.outputdir, motif_counter), shell=True)
+
+            motif_table['motif_id'].append(motif_counter)
+            motif_table['num_supporting_seqs'].append(n)
+            motif_table['mean_copynumber'].append(mu_CN)
+            motif_table['stdev_copynumber'].append(sigma_CN)
+            motif_table['PK_compatibility'].append(PK)
+            motif_table['dot_bracket'].append(get_dot_bracket(PK))
+            motif_table['pKiss_match'].append(pkiss_presence)
+            motif_table['sequence_mode'].append(mode_seq)
+            motif_table['mode_neighborhood_occupancy'].append(occupancy / 861.0)
+            motif_table['mode_neighborhood_norm_entropy'].append(get_norm_entropy(np.array(total.ix[subset.index, 'copy_number'])))
+            
+            motif_counter += 1
+    conn.close()
+    print 'motif identification complete'
+    columns = ['motif_id','num_supporting_seqs','mean_copynumber','stdev_copynumber','PK_compatibility','dot_bracket','pKiss_match','sequence_mode','mode_neighborhood_occupancy','mode_neighborhood_norm_entropy']
+    pd.DataFrame(motif_table, columns=columns).to_csv('{0}/step3/table_motifs.tsv'.format(args.outputdir), index=False, sep='\t')
+
+if args.step.find('4') > -1:
+    print 'STEP 4: Single and Pairwise Nucleotide Variant Analysis'
+
+    if not exists(args.outputdir + '/step4'):
+        makedirs(args.outputdir + '/step4')
+
+    abundances = pd.read_csv('{0}/step1/abundances.txt'.format(args.outputdir), sep='\t', header=None, names=['copy_number','sequence'])
+    variable_positions = [idx for idx in range(len(config['scaffold'])) if config['scaffold'][idx] == '.']
+
+    nbs = get_neighborhood(args.motifseq, variable_positions)[:42]
+    possible_subs = []
+    for nb in nbs:
+        possible_subs += get_nucleotide_substitutions(args.motifseq, nb)
+    neighbor_1 = pd.Series(np.zeros((43,)), index = ['WT'] + possible_subs, name='abundance')
+    neighbor_1['WT'] = abundances['copy_number'][abundances[abundances['sequence'] == args.motifseq].index[0]] ** (1.0/3)
+    for nb in nbs:
+        idx = abundances[abundances['sequence'] == nb].index[0]
+        neighbor_1[get_nucleotide_substitutions(args.motifseq, nb)[0]] = abundances['copy_number'][idx] ** (1.0/3)
+    print '{0} / {1} possible single nucleotide variants detected in library'.format(len(np.nonzero(neighbor_1)[0]) - 1, 3 * len(variable_positions))
+
+    neighbor_2 = pd.DataFrame(np.zeros((42,42)), index=possible_subs, columns=possible_subs)
+    for snv in possible_subs:
+        neighbor_2.ix[snv,snv] = neighbor_1[snv]
+
+    nbs = get_neighborhood(args.motifseq, variable_positions)[42:]
+    for nb in nbs:
+        idx = abundances[abundances['sequence'] == nb].index
+        if len(idx):
+            idx = idx[0]
+            row = get_nucleotide_substitutions(args.motifseq, nb)[0]
+            col = get_nucleotide_substitutions(args.motifseq, nb)[1]
+            neighbor_2.ix[row, col] = abundances['copy_number'][idx] ** (1.0/3)
+            neighbor_2.ix[col, row] = abundances['copy_number'][idx] ** (1.0/3)
+    print '{0} / {1} possible pairwise nucleotide variants detected in library'.format((len(np.where(neighbor_2 > 0)[0]) - len(neighbor_2)) / 2, 9 * len(variable_positions) * (len(variable_positions) - 1) / 2)
+    
+    ind = np.arange(43)
+    plt.bar(ind, neighbor_1)
+    plt.xticks(ind + 0.5, neighbor_1.index, rotation='vertical')
+    plt.xlim(-0.5, 43.5)
+    plt.ylabel('$\sqrt[3]{abundance}$')
+    plt.title('Single Nucleotide Variants of Sequence:\n{0}'.format(args.motifseq))
+    plt.tight_layout()
+    plt.savefig('{0}/step4/mut_single.pdf'.format(args.outputdir))
+    plt.clf()
+    neighbor_1.to_csv('{0}/step4/mut_single.csv'.format(args.outputdir))
+
+    sn.heatmap(neighbor_2)
+    plt.title('Pairwise Nucleotide Variants of Sequence:\n{0}'.format(args.motifseq))
+    plt.tight_layout()
+    plt.savefig('{0}/step4/mut_pairwise.pdf'.format(args.outputdir))
+    neighbor_2.to_csv('{0}/step4/mut_pairwise.csv'.format(args.outputdir))
+
+print '------------'
+print 'FINISHED RUN'
