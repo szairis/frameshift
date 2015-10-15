@@ -1,12 +1,13 @@
 #!/usr/bin/env python
 from os.path import exists
 from os import makedirs, environ
+from copy import deepcopy
 import subprocess
 import argparse
 import json
 import httplib
+from itertools import product, combinations
 import time
-from itertools import product, combinations 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -16,6 +17,7 @@ sn.set_context('paper')
 sn.set_style('whitegrid')
 from Bio import Seq
 from scipy.stats import entropy
+from distance import hamming
 
 parser = argparse.ArgumentParser(description='nominate frameshift promoting pseudoknot motifs')
 parser.add_argument('-c', '--configfile', required=True,
@@ -196,6 +198,32 @@ def get_norm_entropy(x):
     prob_vector_uniform = np.ones((len(x),)) / len(x)
     return entropy(prob_vector_x) / entropy(prob_vector_uniform)
 
+def get_greedy_clustering(seq_list, idx_list, target_percentile_thresh=0.1):
+    k = 0
+    clust_dict = {}
+    while len(seq_list) > 0:
+        hits_seq = []; hits_idx = []; targets = []
+        targets.append(seq_list[0])
+        hits_seq.append(seq_list[0])
+        hits_idx.append(idx_list[0])
+        for targ in targets:
+            counter = 0.0
+            for j in range(len(seq_list)):
+                counter += 1
+                current_seq = seq_list[j]
+                if hamming(targ, current_seq) <= 2:
+                    if current_seq not in hits_seq:
+                        hits_seq.append(current_seq)
+                        hits_idx.append(idx_list[j])
+                    if counter / len(seq_list) <= target_percentile_thresh and current_seq not in targets:
+                        targets.append(current_seq)
+        for i in range(len(hits_seq)):
+            seq_list.remove(hits_seq[i])
+            idx_list.remove(hits_idx[i])
+        clust_dict[k] = hits_idx
+        k += 1
+    return clust_dict
+
 
 if args.step.find('1') > -1:
     print 'STEP 1: Calculating Sequence Abundances'
@@ -231,7 +259,7 @@ if args.step.find('2') > -1:
     if not exists(args.outputdir + '/step2'):
         makedirs(args.outputdir + '/step2')
 
-    abundances = pd.read_csv('{0}/step1/abundances.txt'.format(args.outputdir), sep='\t', header=None, names=['copy_number','sequence'])[:int(args.numseq)]
+    abundances = pd.read_csv('{0}/step1/abundances.txt'.format(args.outputdir), sep='\t', header=None, names=['copy_number','sequence'], nrows=int(args.numseq))
 
     seq_list = list(abundances['sequence'])
     scaffold = config['scaffold'].replace('.','N')
@@ -255,9 +283,10 @@ if args.step.find('3') > -1:
     if not exists(args.outputdir + '/step3'):
         makedirs(args.outputdir + '/step3')
 
-    abundances = pd.read_csv('{0}/step1/abundances.txt'.format(args.outputdir), sep='\t', header=None, names=['copy_number','sequence'])[:int(args.numseq)]
-    featspace_pkcompat = pd.read_csv('{0}/step2/PK_compatibility.tsv'.format(args.outputdir), sep='\t')
-    feature_names = list(featspace_pkcompat.columns)
+    abundances = pd.read_csv('{0}/step1/abundances.txt'.format(args.outputdir), sep='\t', header=None, names=['copy_number','sequence'], nrows=int(args.numseq))
+    featspace_pkcompat = pd.read_csv('{0}/step2/PK_compatibility.tsv'.format(args.outputdir), sep='\t', nrows=int(args.numseq))
+    observed_PKs = list(featspace_pkcompat.sum(axis=0)[featspace_pkcompat.sum(axis=0) > 0].sort(1, inplace=False, ascending=False).index)
+    print '{0} different PK compatibilities observed in top {1} sequences'.format(len(observed_PKs), args.numseq)
     total = pd.concat([abundances, featspace_pkcompat], axis=1, join='inner')
 
     abundances_PK_initial = pd.read_csv('{0}/resources/abundances_PK_initial.txt'.format(code_directory),
@@ -265,9 +294,6 @@ if args.step.find('3') > -1:
     abundances_PK_selection = pd.read_csv('{0}/resources/abundances_PK_fs1.txt'.format(code_directory),
         sep='\t', index_col=2, names=['copy_number_selection','feature_name_selection'])
     prepost_selection = pd.concat([abundances_PK_initial, abundances_PK_selection], axis=1, join='inner').sort('copy_number_initial', ascending=True, inplace=False)
-
-    observed_PKs = list(featspace_pkcompat.sum(axis=0)[featspace_pkcompat.sum(axis=0) > 0].sort(1, inplace=False, ascending=False).index)
-    print '{0} different PK compatibilities observed in top {1} sequences'.format(len(observed_PKs), args.numseq)
     
     mean_abundances = []
     for feat in observed_PKs:
@@ -278,7 +304,7 @@ if args.step.find('3') > -1:
     mean_abundances = np.array(mean_abundances)
     np.savetxt('{0}/tmp/mean_abundances.txt'.format(args.outputdir), mean_abundances)
 
-    thresh = 0.05
+    thresh = 0.1
     percentile_enrichment = int(thresh * len(prepost_selection))
     percentile_mean_abundance = np.sort(mean_abundances)[::-1][int(thresh * len(mean_abundances))]
     enrichments = (prepost_selection['copy_number_selection'] / prepost_selection['copy_number_selection'].sum()) / (prepost_selection['copy_number_initial'] / prepost_selection['copy_number_initial'].sum())
@@ -288,34 +314,22 @@ if args.step.find('3') > -1:
 
     PK_match_seqs = {}
     PK_match_idx = {}
-    num_clusters = {}
+    cluster_results = {}
     for PK in nominees_PK:
         match_seqs = list(total[total[PK] == 1]['sequence'])
         match_idx = list(total[total[PK] == 1].index)
         PK_match_seqs[PK] = match_seqs
         PK_match_idx[PK] = match_idx
-
-        with open('{0}/tmp/PK_{1}.fasta'.format(args.outputdir, PK.replace('|','_')), 'w') as fastafile:
-            for idx, seq in zip(match_idx, match_seqs):
-                fastafile.write('>{0}\n{1}\n'.format(idx, seq))
-        cmd = '{0}/resources/cdhit/cd-hit-est -i {1}/tmp/PK_{2}.fasta -o {1}/tmp/cdhit-{2} -c {3} >/dev/null 2>&1'.format(code_directory, args.outputdir, PK.replace('|','_'), config['cluster_similarity_threshold'])
-        subprocess.call(cmd, shell=True)
-        num_clusters[PK] = int(subprocess.check_output(['wc', '-l', '{0}/tmp/cdhit-{1}'.format(args.outputdir, PK.replace('|','_'))]).split(args.outputdir)[0].strip()) / 2
-        print '{0} cluster(s) detected for the {1} sequences matching {2}'.format(num_clusters[PK], len(match_seqs), PK)
+        cluster_results[PK] = get_greedy_clustering(deepcopy(match_seqs), deepcopy(match_idx))
+        print '{0} cluster(s) detected for the {1} sequences matching {2}'.format(len(cluster_results[PK]), len(match_seqs), PK)
     
     clustering = {}
     for PK in nominees_PK:
-        clustering[PK] = pd.DataFrame(np.zeros((len(PK_match_seqs[PK]), num_clusters[PK])), index=PK_match_idx[PK], columns=['cluster_{0}'.format(i) for i in range(num_clusters[PK])])
-        with open('{0}/tmp/cdhit-{1}.clstr'.format(args.outputdir, PK.replace('|','_'))) as cd_hit:
-            for line in cd_hit:
-                if line[0] == '>':
-                    c_num = line.strip().split()[-1]
-                else:
-                    row = int(line.split('>')[1].split('...')[0])
-                    clustering[PK]['cluster_{0}'.format(c_num)][row] = 1
+        clustering[PK] = pd.DataFrame(np.zeros((len(PK_match_seqs[PK]), len(cluster_results[PK]))), index=PK_match_idx[PK], columns=['cluster_{0}'.format(i) for i in range(len(cluster_results[PK]))])
+        for c_num in cluster_results[PK]:
+            for row_id in cluster_results[PK][c_num]:
+                clustering[PK]['cluster_{0}'.format(c_num)][row_id] = 1
 
-    num_motifs = sum([num_clusters[pk] for pk in nominees_PK])
-    print '{0} motifs identified'.format(num_motifs)
     motif_table = { 'motif_id':[],
                     'num_supporting_seqs':[],
                     'mean_copynumber':[],
@@ -335,6 +349,8 @@ if args.step.find('3') > -1:
         for c in clustering[PK].columns:
             subset = clustering[PK][clustering[PK][c] == 1]
             n = len(subset)
+            if n < int(config['min_number_sequences_motif']):
+                continue
             mu_CN = total.ix[subset.index, 'copy_number'].mean()
             sigma_CN = total.ix[subset.index, 'copy_number'].std()
             mode_seq = total['sequence'][min(subset.index)]
