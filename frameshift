@@ -231,12 +231,12 @@ if args.step.find('1') > -1:
     if not exists(args.outputdir + '/step1'):
         makedirs(args.outputdir + '/step1')
 
-    cmd_1_1 = 'gunzip -c {0} | grep -o "{1}" | grep -v "N" > {2}/tmp/scaffold_wt.txt'.format(args.inputdata, config['scaffold'], args.outputdir)
-    subprocess.call(cmd_1_1, shell=True)
-    cmd_1_2 = 'sort {0}/tmp/scaffold_wt.txt | uniq -c | sort -nr | sed "s/ T/	T/" | sed "s/ C/	C/" | sed "s/ G/	G/" | sed "s/ A/	A/" > {0}/step1/abundances.txt'.format(args.outputdir)
-    subprocess.call(cmd_1_2, shell=True)
-    subprocess.call(['rm', '{0}/tmp/scaffold_wt.txt'.format(args.outputdir)])
-
+    if not exists(args.outputdir + '/step1/abundances.txt'):
+        cmd_1_1 = 'gunzip -c {0} | grep -o "{1}" | grep -v "N" > {2}/tmp/scaffold_wt.txt'.format(args.inputdata, config['scaffold'], args.outputdir)
+        subprocess.call(cmd_1_1, shell=True)
+        cmd_1_2 = 'sort {0}/tmp/scaffold_wt.txt | uniq -c | sort -nr | sed "s/ T/	T/" | sed "s/ C/	C/" | sed "s/ G/	G/" | sed "s/ A/	A/" > {0}/step1/abundances.txt'.format(args.outputdir)
+        subprocess.call(cmd_1_2, shell=True)
+        subprocess.call(['rm', '{0}/tmp/scaffold_wt.txt'.format(args.outputdir)])
     abundances = pd.read_csv('{0}/step1/abundances.txt'.format(args.outputdir), sep='\t', header=None, names=['copy_number','sequence'])
     num_sequences_needed = np.where(np.array(np.cumsum(abundances['copy_number']) / abundances['copy_number'].sum()) >= config['top_fraction'])[0][0]
     print '{0} of the library is contained in the top {1} most abundant sequences'.format(config['top_fraction'], num_sequences_needed)
