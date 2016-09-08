@@ -1,6 +1,7 @@
 ## Frameshift Promoting Motif Identification In High-Throughput Selection Libraries ##
 
-A computational workflow for nominating -1 PRF motifs from in vitro selection libraries, developed by Andrew V. Anzalone and Sakellarios Zairis.
+A computational workflow for nominating -1 PRF motifs from in vitro selection libraries, developed by Sakellarios Zairis and Andrew Anzalone.
+The pipeline and its application in discovering ligand responsive riboswitches is now [published](http://www.nature.com/nmeth/journal/v13/n5/abs/nmeth.3807.html).
 
 ### Requirements: ###
 ---
